@@ -249,3 +249,7 @@ i686     cc1b33edd4b08c51884b3e8da0d1536fa531a7119e6ab08e5d3a29b0c91188e5
 
 *TLP:CLEAR. Detection content and IOCs are free to use. No malware binaries are distributed in this
 repository.*
+
+## License
+
+[MIT](LICENSE) — the writeup, Suricata rules, and dissector are free to use, modify, and redistribute.
