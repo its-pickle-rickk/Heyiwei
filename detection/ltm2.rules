@@ -1,0 +1,6 @@
+# Heyiwei / "LTM" — bespoke encrypted-C2 Linux RAT. LTM2 protocol handshake magics.
+# Port-agnostic (C2 may move off 25565). TLP:WHITE. 2026-11-10.
+alert tcp any any -> any any (msg:"MALWARE Heyiwei/LTM LTM2 C2 client-hello (CHLO)"; flow:established,to_server; dsize:104; content:"LTM2CHLO"; depth:8; classtype:trojan-activity; reference:md5,none; sid:9500001; rev:1;)
+alert tcp any any -> any any (msg:"MALWARE Heyiwei/LTM LTM2 C2 server-hello (SHLO)"; flow:established,to_client; dsize:72; content:"LTM2SHLO"; depth:8; classtype:trojan-activity; sid:9500002; rev:1;)
+# Looser fallback (no dsize) in case of fragmentation/retransmit:
+alert tcp any any -> any any (msg:"MALWARE Heyiwei/LTM LTM2 handshake magic (either dir)"; pcre:"/^LTM2(CHLO|SHLO)/"; classtype:trojan-activity; sid:9500003; rev:1;)

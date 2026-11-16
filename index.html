@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Technical reverse-engineering of Heyiwei, a bespoke encrypted-C2 Linux RAT, and its LTM2 protocol.">
+<title>Heyiwei LTM2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+*{box-sizing:border-box}
+:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{-webkit-text-size-adjust:100%}
+body{margin:0}
+img{max-width:100%}
+[hidden]{display:none!important}
+
+/* Layout: one ~52rem reading column; slim sticky header; full-width code/figure/table rails inside it.
+   Identity: cryptographic-forensics — ink ground, cipher-blue for structure, signal-amber for the break. */
+:root{
+  --bg:#f6f4ef; --surface:#ffffff; --panel:#f0ece3; --fg:#1b1d23; --muted:#5a6069;
+  --border:#e2ded3; --line:#d7d2c6;
+  --accent:#2f52c8;      /* cipher blue — protocol / structure */
+  --signal:#c04a22;      /* signal amber — the break / threat    */
+  --ok:#277a53;
+  --code:#24272e; --cm:#8c9099; --st:#277a53; --kw:#8544ad; --hl:#c04a22; --num:#2f52c8;
+  --chip:#eceff9; --chip-fg:#2f52c8;
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --disp:"Space Grotesk",system-ui,sans-serif;
+  --body:"Inter",system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d1016; --surface:#161a22; --panel:#10131a; --fg:#e7e4dc; --muted:#99a0ab;
+  --border:#262c37; --line:#2a313d;
+  --accent:#86a6ff; --signal:#ff8a5c; --ok:#79cf9f;
+  --code:#d8dbe2; --cm:#6a7280; --st:#79cf9f; --kw:#c79bf0; --hl:#ff9a6b; --num:#86a6ff;
+  --chip:#1a2436; --chip-fg:#9db8ff;
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0d1016; --surface:#161a22; --panel:#10131a; --fg:#e7e4dc; --muted:#99a0ab;
+  --border:#262c37; --line:#2a313d;
+  --accent:#86a6ff; --signal:#ff8a5c; --ok:#79cf9f;
+  --code:#d8dbe2; --cm:#6a7280; --st:#79cf9f; --kw:#c79bf0; --hl:#ff9a6b; --num:#86a6ff;
+  --chip:#1a2436; --chip-fg:#9db8ff;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.6;
+  font-size:16px;-webkit-font-smoothing:antialiased;letter-spacing:-0.004em}
+.gutter{padding-left:max(18px,env(safe-area-inset-left,0px));padding-right:max(18px,env(safe-area-inset-right,0px))}
+
+/* sticky header band */
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:20;
+  background:var(--surface)}
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:15;
+  background:color-mix(in srgb,var(--surface) 86%,transparent);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border)}
+.topbar .in{max-width:62rem;margin:0 auto;display:flex;align-items:center;gap:14px;height:52px}
+.mark{font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:-0.02em;display:flex;align-items:center;gap:8px}
+.mark .dot{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 0 3px color-mix(in srgb,var(--signal) 22%,transparent)}
+.mark b{color:var(--accent)}
+.topbar .sp{flex:1}
+.tlp{font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.08em;
+  padding:3px 7px;border:1px solid var(--line);border-radius:5px;color:var(--muted)}
+.tbtn{font:inherit;font-size:13px;cursor:pointer;background:transparent;color:var(--muted);
+  border:1px solid var(--border);border-radius:7px;width:34px;height:30px;display:grid;place-items:center;padding:0}
+.tbtn:hover{color:var(--fg);border-color:var(--line)}
+.tbtn svg{width:16px;height:16px}
+
+main{max-width:52rem;margin:0 auto;padding-top:34px;padding-bottom:72px}
+section{margin-top:40px}
+.prose p{margin:0 0 14px;max-width:40rem}
+
+/* hero */
+.eyebrow{font-family:var(--mono);font-size:11.5px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--signal);margin:0 0 14px}
+h1{font-family:var(--disp);font-weight:700;font-size:clamp(2.3rem,7vw,3.5rem);line-height:1.02;
+  letter-spacing:-0.03em;margin:0;text-wrap:balance}
+h1 .slash{color:var(--muted);font-weight:500}
+.lede{font-family:var(--disp);font-weight:500;font-size:clamp(1.12rem,2.6vw,1.4rem);line-height:1.4;
+  color:var(--fg);margin:18px 0 0;max-width:34rem;text-wrap:balance;letter-spacing:-0.01em}
+.abstract{margin-top:22px}
+.abstract p{color:var(--muted);max-width:40rem}
+
+/* fact chips */
+.facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+.fact{font-family:var(--mono);font-size:12px;font-weight:500;line-height:1.3;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 12px;min-width:0}
+.fact b{color:var(--accent);font-weight:700}
+.fact .s{color:var(--signal);font-weight:700}
+
+/* headings */
+h2{font-family:var(--disp);font-weight:600;font-size:1.6rem;letter-spacing:-0.02em;line-height:1.1;
+  margin:0 0 4px;text-wrap:balance}
+.kick{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent);display:block;margin-bottom:10px}
+h3{font-family:var(--disp);font-weight:600;font-size:1.12rem;letter-spacing:-0.01em;margin:26px 0 8px}
+.rule{height:1px;background:var(--border);border:0;margin:0}
+
+/* code */
+.code{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow-x:auto;margin:16px 0}
+.code pre{margin:0;padding:15px 16px;min-width:0}
+.code code{font-family:var(--mono);font-size:13px;line-height:1.65;color:var(--code);white-space:pre;letter-spacing:0}
+.code .cap{display:flex;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);
+  font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.03em;color:var(--muted);flex-wrap:wrap}
+.code .cap .tag{color:var(--accent)}
+.code .cap .sp{flex:1}
+.cm{color:var(--cm)} .st{color:var(--st)} .kw{color:var(--kw)} .hl{color:var(--hl);font-weight:700} .nm{color:var(--num)}
+code.inl{font-family:var(--mono);font-size:.88em;background:var(--panel);border:1px solid var(--border);
+  padding:1px 5px;border-radius:5px;color:var(--fg);word-break:break-word}
+
+/* tables */
+.tw{overflow-x:auto;margin:16px 0;border:1px solid var(--border);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:0}
+th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--border);vertical-align:top}
+thead th{font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--muted);background:var(--panel)}
+tbody tr:last-child td{border-bottom:0}
+td.m,th.m{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+td .ty{font-family:var(--mono);font-weight:700;color:var(--accent)}
+.lin td:first-child{color:var(--signal);font-family:var(--mono);font-weight:600;white-space:nowrap}
+
+/* figure */
+figure{margin:18px 0}
+.fig{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 16px 8px}
+.fig svg{display:block;width:100%;height:auto;max-width:100%}
+.fig svg text{font-family:var(--mono)}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:10px;padding:0 2px}
+.diag-mag{fill:var(--accent);font-weight:700}
+.diag-sig{fill:var(--signal);font-weight:700}
+
+/* callout */
+.call{border:1px solid var(--border);border-left:3px solid var(--signal);background:var(--surface);
+  border-radius:10px;padding:14px 16px;margin:18px 0}
+.call.ok{border-left-color:var(--ok)}
+.call .h{font-family:var(--disp);font-weight:600;font-size:.98rem;margin:0 0 4px}
+.call p{margin:0;color:var(--muted);font-size:14.5px;max-width:42rem}
+.call.ok .h{color:var(--ok)}
+
+/* copy button */
+.cp{font:inherit;font-family:var(--mono);font-size:10.5px;font-weight:600;cursor:pointer;
+  background:transparent;border:1px solid var(--line);border-radius:5px;color:var(--muted);padding:2px 7px}
+.cp:hover{color:var(--fg)} .cp.done{color:var(--ok);border-color:var(--ok)}
+
+/* ioc key-value */
+.ioc dt{font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin-top:14px}
+.ioc dd{margin:3px 0 0;font-family:var(--mono);font-size:13px;word-break:break-word}
+.ioc dd .hash{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+footer{margin-top:56px;border-top:1px solid var(--border);padding-top:20px;color:var(--muted);font-size:12.5px}
+footer p{margin:0 0 6px;max-width:40rem}
+footer .mono{font-family:var(--mono)}
+
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+a:hover{border-bottom-color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.load{opacity:0;transform:translateY(8px);animation:rise .6s cubic-bezier(.2,.7,.2,1) forwards}
+@media (prefers-reduced-motion:reduce){.load{animation:none;opacity:1;transform:none}}
+@keyframes rise{to{opacity:1;transform:none}}
+@media (max-width:560px){ main{padding-top:24px} h2{font-size:1.4rem} .code code{font-size:12px} }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="in gutter">
+    <span class="mark"><span class="dot"></span>Heyiwei<b>/LTM2</b></span>
+    <span class="sp"></span>
+    <span class="tlp">TLP:CLEAR</span>
+    <button class="tbtn" id="themeBtn" aria-label="Toggle light and dark theme" title="Toggle theme"></button>
+  </div>
+</header>
+
+<main class="gutter">
+
+  <div class="load">
+    <p class="eyebrow">Linux RAT · Malware analysis</p>
+    <h1>Heyiwei <span class="slash">/</span> LTM2</h1>
+    <p class="lede">A bespoke, encrypted command-and-control backdoor — reverse-engineered from the wire format down to the key schedule.</p>
+    <div class="abstract prose">
+      <p>Heyiwei is a ground-up custom, multi-architecture Linux backdoor that spreads to IoT and Linux
+      hosts through an ADB/telnet stager. It is <strong>not</strong> Mirai or Gafgyt. It carries its own named,
+      fully engineered encrypted transport — <strong>LTM2</strong> — built from X25519 key exchange, a
+      keyed-BLAKE2b key schedule, and XChaCha20-Poly1305 authenticated records. It had run roughly a year
+      with no public documentation and near-zero antivirus coverage before it was caught.</p>
+    </div>
+    <div class="facts">
+      <span class="fact"><b>0&#8203;/75</b> on VirusTotal <span style="color:var(--muted)">(i686 build)</span></span>
+      <span class="fact"><b>11</b> architecture builds</span>
+      <span class="fact">X25519 · XChaCha20-Poly1305 · BLAKE2b</span>
+      <span class="fact"><b>4</b> services · <span class="s">0</span> flood primitives</span>
+      <span class="fact">~1 year undocumented</span>
+    </div>
+  </div>
+
+  <hr class="rule" style="margin-top:38px">
+
+  <!-- LINEAGE -->
+  <section>
+    <span class="kick">01 · Lineage</span>
+    <h2>Why it isn&rsquo;t Mirai</h2>
+    <div class="prose">
+      <p>The generic <code class="inl">trojan.mirai</code> label is exactly what lets a serious custom implant
+      pass as commodity noise. The distinction is structural, not stylistic: Heyiwei shares no strings, config
+      format, or attack-table layout with either common family. Where they use a byte-XOR table or plaintext
+      ASCII, it uses real asymmetric cryptography.</p>
+    </div>
+    <div class="tw">
+      <table class="lin">
+        <thead><tr><th>Trait</th><th>Mirai</th><th>Gafgyt / Bashlite</th><th>Heyiwei / LTM2</th></tr></thead>
+        <tbody>
+          <tr><td>Config</td><td>single-byte XOR table</td><td>plaintext</td><td>X25519 + BLAKE2b schedule</td></tr>
+          <tr><td>C2 transport</td><td>near-plaintext TLV</td><td>plaintext ASCII</td><td>XChaCha20-Poly1305 AEAD</td></tr>
+          <tr><td>Command set</td><td>DDoS attack table</td><td>flood methods</td><td>shell / exec / push / pull</td></tr>
+          <tr><td>Shared strings</td><td>yes, well-known</td><td>yes, well-known</td><td>none</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>Automated triage first flagged &ldquo;Speck / Salsa20 / RC4.&rdquo; Those were false positives —
+      Salsa20&rsquo;s quarter-round is structurally identical to ChaCha&rsquo;s, and the &ldquo;RC4&rdquo;
+      256-byte buffer is locale parsing, not a cipher. The real stack, confirmed by the constants and the
+      label strings left in the clear, is X25519 + XChaCha20-Poly1305 + keyed BLAKE2b — the shape of
+      Monocypher.</p>
+    </div>
+  </section>
+
+  <!-- HANDSHAKE -->
+  <section>
+    <span class="kick">02 · Transport</span>
+    <h2>The LTM2 handshake</h2>
+    <div class="prose">
+      <p>LTM2 is a compact, Noise-flavored channel: ephemeral elliptic-curve key exchange, a transcript-bound
+      key schedule, then per-direction authenticated records. The whole protocol was recovered from the
+      un-obfuscated x86-64 build and cross-checked against bytes captured from a running sample in an isolated
+      lab.</p>
+    </div>
+
+    <figure>
+      <div class="fig">
+        <svg viewBox="0 0 720 350" role="img" aria-label="LTM2 handshake: client sends a 104-byte LTM2CHLO, server replies with a 72-byte LTM2SHLO, both derive a shared secret and directional keys, then exchange XChaCha20-Poly1305 records.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+            <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+            </marker>
+          </defs>
+          <!-- actor headers -->
+          <rect x="40" y="18" width="150" height="40" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <text x="115" y="43" text-anchor="middle" font-family="var(--mono)" font-size="13" font-weight="700" fill="currentColor">CLIENT · bot</text>
+          <rect x="530" y="18" width="150" height="40" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <text x="605" y="43" text-anchor="middle" font-family="var(--mono)" font-size="13" font-weight="700" fill="currentColor">SERVER · C2</text>
+          <!-- lifelines -->
+          <line x1="115" y1="58" x2="115" y2="332" stroke="currentColor" stroke-width="1" stroke-dasharray="3 5" opacity="0.5"/>
+          <line x1="605" y1="58" x2="605" y2="332" stroke="currentColor" stroke-width="1" stroke-dasharray="3 5" opacity="0.5"/>
+
+          <!-- CHLO -->
+          <text x="118" y="92" font-family="var(--mono)" font-size="13" class="diag-mag">LTM2CHLO · 104 B</text>
+          <text x="118" y="108" font-family="var(--body)" font-size="11.5" fill="currentColor" opacity="0.72">ephemeral X25519 pub · bot-ID · nonce</text>
+          <line x1="115" y1="118" x2="603" y2="118" stroke="var(--accent)" stroke-width="2" marker-end="url(#ahb)"/>
+
+          <!-- SHLO -->
+          <text x="602" y="150" text-anchor="end" font-family="var(--mono)" font-size="13" class="diag-mag">LTM2SHLO · 72 B</text>
+          <text x="602" y="166" text-anchor="end" font-family="var(--body)" font-size="11.5" fill="currentColor" opacity="0.72">ephemeral X25519 pub · nonce</text>
+          <line x1="605" y1="176" x2="117" y2="176" stroke="var(--accent)" stroke-width="2" marker-end="url(#ahb)"/>
+
+          <!-- derive band -->
+          <rect x="150" y="198" width="420" height="52" rx="8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4" opacity="0.65"/>
+          <text x="360" y="220" text-anchor="middle" font-family="var(--mono)" font-size="12.5" font-weight="700" fill="currentColor">X25519 shared secret</text>
+          <text x="360" y="238" text-anchor="middle" font-family="var(--body)" font-size="12" fill="currentColor" opacity="0.78">keyed-BLAKE2b schedule → per-direction key + IV</text>
+
+          <!-- AEAD -->
+          <text x="360" y="288" text-anchor="middle" font-family="var(--mono)" font-size="13" class="diag-sig">XChaCha20-Poly1305 records</text>
+          <line x1="117" y1="300" x2="603" y2="300" stroke="currentColor" stroke-width="2" marker-start="url(#ah)" marker-end="url(#ah)"/>
+          <text x="360" y="322" text-anchor="middle" font-family="var(--body)" font-size="11.5" fill="currentColor" opacity="0.72">per-direction sequence · strict anti-replay</text>
+        </svg>
+      </div>
+      <figcaption>Two round trips establish an authenticated, per-direction channel. Everything after the
+      server-hello is encrypted; the only fixed markers on the wire are the two 8-byte magics.</figcaption>
+    </figure>
+
+    <h3>Client-Hello byte layout</h3>
+    <div class="prose"><p>Confirmed against a live 104-byte capture — the sample resolved its C2 to a lab sink
+      and sent this before any reply:</p></div>
+    <div class="tw">
+      <table>
+        <thead><tr><th class="m">Offset</th><th class="m">Len</th><th>Field</th></tr></thead>
+        <tbody>
+          <tr><td class="m">0</td><td class="m">8</td><td><code class="inl">"LTM2CHLO"</code> magic</td></tr>
+          <tr><td class="m">8</td><td class="m">30</td><td>bot-ID — ASCII hex token from <code class="inl">getrandom</code>, fresh per infection</td></tr>
+          <tr><td class="m">38</td><td class="m">2</td><td><code class="inl">00 00</code> — pad to 32</td></tr>
+          <tr><td class="m">40</td><td class="m">32</td><td>nonce</td></tr>
+          <tr><td class="m">72</td><td class="m">32</td><td>X25519 ephemeral public key</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose"><p>The identity field is the human-readable per-device bot-ID, null-padded — not an
+      opaque blob. The Server-Hello mirrors it at 72 bytes:
+      <code class="inl">"LTM2SHLO" | nonce[32] | server_pub[32]</code>.</p></div>
+  </section>
+
+  <!-- KEY SCHEDULE -->
+  <section>
+    <span class="kick">03 · Key schedule</span>
+    <h2>Where &ldquo;bespoke&rdquo; stops being an opinion</h2>
+    <div class="prose">
+      <p>This is the heart of the family. Below is the key derivation straight out of the decompiled x86-64
+      build — decompiler names kept, primitives annotated. The shared secret is used as the <em>key</em> of a
+      keyed hash, and the <em>entire</em> client-hello and server-hello are absorbed into the master, binding
+      every session key to the exact handshake transcript.</p>
+    </div>
+    <div class="code">
+      <div class="cap"><span class="tag">ghidra</span> x86-64 build · key schedule <span class="sp"></span><span>decompiled</span></div>
+<pre><code><span class="cm">/* master = BLAKE2b( key = X25519 shared secret,
+                     data = "LTM2 session master" || CHLO || SHLO ) */</span>
+FUN_00407587(ctx, <span class="nm">0x20</span>, shared, <span class="nm">0x20</span>);                 <span class="cm">// keyed init, key = 32-byte shared secret</span>
+FUN_004076c7(ctx, <span class="st">"LTM2 session master"</span>, <span class="nm">0x13</span>);        <span class="cm">// absorb 19-byte label</span>
+FUN_004076c7(ctx, chlo, <span class="nm">0x68</span>);                         <span class="cm">// absorb the full 104-byte CHLO</span>
+FUN_004076c7(ctx, shlo, <span class="nm">0x48</span>);                         <span class="cm">// absorb the full  72-byte SHLO</span>
+FUN_004076d6(ctx, master);                             <span class="cm">// finalize -&gt; 32-byte session master</span>
+
+<span class="cm">/* two 48-byte directional secrets, each keyed by the master */</span>
+FUN_0040775b(c2s, <span class="nm">0x30</span>, master, <span class="nm">0x20</span>, <span class="st">"LTM2 client to server"</span>, <span class="nm">0x15</span>);  <span class="cm">// -&gt; key[32] | iv[16]</span>
+FUN_0040775b(s2c, <span class="nm">0x30</span>, master, <span class="nm">0x20</span>, <span class="st">"LTM2 server to client"</span>, <span class="nm">0x15</span>);  <span class="cm">// -&gt; key[32] | iv[16]</span></code></pre>
+    </div>
+    <div class="prose">
+      <p>A clean-room reimplementation reproduces it exactly — same labels, same transcript binding, same
+      split into a 32-byte key and 16-byte IV per direction:</p>
+    </div>
+    <div class="code">
+      <div class="cap"><span class="tag">python</span> reconstructed schedule <span class="sp"></span><span>verified</span></div>
+<pre><code>master = blake2b(<span class="st">b"LTM2 session master"</span> + chlo + shlo, key=shared, digest_size=<span class="nm">32</span>)
+c2s    = blake2b(<span class="st">b"LTM2 client to server"</span>,             key=master, digest_size=<span class="nm">48</span>)
+s2c    = blake2b(<span class="st">b"LTM2 server to client"</span>,             key=master, digest_size=<span class="nm">48</span>)
+<span class="cm"># key, iv = dir[:32], dir[32:48]   (per direction)</span></code></pre>
+    </div>
+    <div class="prose"><p>This is competent, modern cryptographic engineering — the opposite of a reused XOR
+      byte, and nothing any IoT-bot family ships.</p></div>
+  </section>
+
+  <!-- RECORDS + APP -->
+  <section>
+    <span class="kick">04 · Records</span>
+    <h2>Framing and the application layer</h2>
+    <div class="prose"><p>Every post-handshake byte is one AEAD record. Header integers are big-endian — the
+      single ordering that makes the whole thing validate — and the 12-byte header is reused verbatim as the
+      authenticated associated data.</p></div>
+    <div class="code">
+      <div class="cap"><span class="tag">wire</span> AEAD record</div>
+<pre><code>record = [ <span class="nm">len</span>:u32 BE ] [ <span class="nm">seq</span>:u64 BE ] [ <span class="hl">tag</span>:16B Poly1305 ] [ <span class="st">XChaCha20( type || payload )</span> ]
+         <span class="cm">└──────── 12-byte header = AEAD associated data ────────┘</span>
+         len   = len(payload) + 1          <span class="cm">// +1 is the type byte</span>
+         nonce = dir_IV[0:16] || seq(BE,8)  <span class="cm">// HChaCha20 subkey from IV, 8-byte inner nonce</span>
+         seq   per-direction, from 0, strictly incrementing  <span class="cm">// anti-replay</span></code></pre>
+    </div>
+    <div class="prose"><p>Inside the AEAD the application protocol is binary: one type byte, then a payload.
+      The design is SSH-connection-shaped — channels, windows, exit status — not a botnet&rsquo;s flat command
+      list. Only one channel is open at a time.</p></div>
+    <div class="tw">
+      <table>
+        <thead><tr><th class="m">Type</th><th class="m">Dir</th><th>Meaning</th><th>Payload</th></tr></thead>
+        <tbody>
+          <tr><td class="m"><span class="ty">0x01</span></td><td class="m">c&rarr;s</td><td>beacon</td><td class="m">host=… arch=… kernel=… uid=…</td></tr>
+          <tr><td class="m"><span class="ty">0x02</span></td><td class="m">s&rarr;c</td><td>ack <span style="color:var(--muted)">(required or bot aborts)</span></td><td class="m">empty</td></tr>
+          <tr><td class="m"><span class="ty">0x03/04</span></td><td class="m">s&rarr;c / c&rarr;s</td><td>ping / pong</td><td class="m">empty</td></tr>
+          <tr><td class="m"><span class="ty">0x0A</span></td><td class="m">s&rarr;c</td><td>open <b>shell</b> — PTY <code class="inl">/bin/sh -i</code></td><td class="m">8-byte winsize</td></tr>
+          <tr><td class="m"><span class="ty">0x0B</span></td><td class="m">s&rarr;c</td><td>open <b>exec</b> — <code class="inl">/bin/sh -c</code></td><td class="m">command, NUL-term</td></tr>
+          <tr><td class="m"><span class="ty">0x0C</span></td><td class="m">s&rarr;c</td><td>open <b>push</b> — write file</td><td class="m">[hdr][dest\0]</td></tr>
+          <tr><td class="m"><span class="ty">0x0D</span></td><td class="m">s&rarr;c</td><td>open <b>pull</b> — read file</td><td class="m">src path\0</td></tr>
+          <tr><td class="m"><span class="ty">0x14</span></td><td class="m">both</td><td>data</td><td class="m">raw channel bytes</td></tr>
+          <tr><td class="m"><span class="ty">0x16/17</span></td><td class="m">s&rarr;c</td><td>file-commit / eof</td><td class="m">size + BLAKE2b-256</td></tr>
+          <tr><td class="m"><span class="ty">0x19</span></td><td class="m">c&rarr;s</td><td>channel exit</td><td class="m">4-byte status</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- THE BREAK -->
+  <section>
+    <span class="kick">05 · Validation</span>
+    <h2>The break</h2>
+    <div class="prose">
+      <p>The key schedule was not guessed — it was proven. A lab LTM2 server (pure reimplementation of X25519,
+      keyed BLAKE2b, and XChaCha20-Poly1305, self-tested against RFC 7748 / 8439 and the XChaCha vectors) was
+      stood up to talk only to a captured sample in an isolated victim VM. It completed the handshake, derived
+      the session keys, and read the traffic.</p>
+    </div>
+    <div class="call ok">
+      <p class="h">The Poly1305 tag verified on the very first record.</p>
+      <p>A wrong key schedule fails the MAC. A first-try verification means every label, length, endianness,
+      and nonce construction is exactly right — the whole scheme is recovered.</p>
+    </div>
+    <div class="code">
+      <div class="cap"><span class="tag">decrypted</span> type-1 beacon · lab</div>
+<pre><code>seq=<span class="nm">0</span>  type=<span class="nm">1</span> (beacon)  len=<span class="nm">61</span>
+<span class="st">host=</span>&lt;hostname&gt; <span class="st">arch=</span>i686 <span class="st">kernel=</span>5.4.0-216-generic <span class="st">uid=</span>0\x00</code></pre>
+    </div>
+    <div class="prose"><p>All four services were then exercised end-to-end against the sample: interactive
+      shell, one-shot exec, and file push/pull — the last two each carrying an unkeyed BLAKE2b-256 integrity
+      trailer, with push staged to a temp name and atomically renamed only after the hash checks out.</p></div>
+  </section>
+
+  <!-- CAPABILITIES -->
+  <section>
+    <span class="kick">06 · Capabilities</span>
+    <h2>A four-service RAT — and no flood code</h2>
+    <div class="prose">
+      <p>The decrypted channel offers exactly four services: interactive <strong>shell</strong>, one-shot
+      <strong>exec</strong>, file <strong>push</strong>, and file <strong>pull</strong>. The &ldquo;no
+      DDoS&rdquo; finding is confirmed, not assumed — a complete inventory of every socket call site found only
+      C2 TCP, the DNS resolver, and one local Unix socket:</p>
+    </div>
+    <div class="code">
+<pre><code><span class="cm">// socket() call sites, x86-64 build — complete inventory</span>
+<span class="hl">no</span> SOCK_RAW        <span class="hl">no</span> IP_HDRINCL      <span class="hl">no</span> bind / listen / accept
+<span class="hl">no</span> flood loop      <span class="hl">no</span> attack dispatch  <span class="hl">no</span> rival-bot kill-list
+only: C2 TCP  ·  DNS resolver (UDP/TCP)  ·  one AF_UNIX</code></pre>
+    </div>
+    <div class="prose">
+      <p>Port <strong>25565</strong> is simply the C2 port — it blends with Minecraft traffic and the
+      <code class="inl">mc.</code> subdomain is camouflage, not evidence of a booter. The net threat is heavier
+      than a flood bot: a persistent, encrypted, interactive foothold with arbitrary file read and write on
+      every infected device.</p>
+    </div>
+  </section>
+
+  <!-- TRADECRAFT -->
+  <section>
+    <span class="kick">07 · Build &amp; persistence</span>
+    <h2>Tradecraft</h2>
+    <div class="prose">
+      <p>Static, stripped ELF built with GCC 15.2.0 on a current 2025 Ubuntu toolchain, in 11 architectures
+      (x86-64, i686, i586, aarch64, ARM v4l&ndash;v7l, MIPS, MIPSEL). The x86-64 build was not
+      string-obfuscated the way the 32-bit builds are — which is how the config, the persistence paths, and the
+      LTM2 label strings were readable in the first place. The loader calls itself &ldquo;Heyiwei stager
+      v3&rdquo;; its author&rsquo;s own English developer comments reference a prior run on a 54-device list and
+      a MIPS-endianness bug they fixed — a competent, iterating operator.</p>
+      <p>Persistence is comprehensive and multi-init: systemd, SysV + rcS, OpenRC, OpenWrt
+      <code class="inl">rc.common</code>, and a custom control script. It installs to
+      <code class="inl">/usr/local/bin/Heyiwei</code>, single-instances on <code class="inl">/tmp/Heyiwei.lock</code>,
+      and masquerades in the process table as the kernel thread <code class="inl">khungtaskd</code>.</p>
+    </div>
+  </section>
+
+  <!-- DETECTION -->
+  <section>
+    <span class="kick">08 · Detection</span>
+    <h2>Signatures</h2>
+    <div class="prose"><p>The two 8-byte handshake magics are the one reliable fixed marker on an otherwise
+      fully encrypted channel. Port-agnostic, since the C2 can move off 25565. The CHLO rule was confirmed
+      exact against a live 104-byte Client-Hello.</p></div>
+    <div class="code">
+      <div class="cap"><span class="tag">suricata</span> ltm2.rules <span class="sp"></span><button class="cp" data-copy="sura">copy</button></div>
+<pre><code id="sura">alert tcp any any -&gt; any any (msg:<span class="st">"Heyiwei/LTM LTM2 C2 client-hello"</span>;
+    flow:established,to_server; dsize:<span class="nm">104</span>; content:<span class="st">"LTM2CHLO"</span>; depth:<span class="nm">8</span>;
+    classtype:trojan-activity; sid:<span class="nm">9500001</span>; rev:1;)
+alert tcp any any -&gt; any any (msg:<span class="st">"Heyiwei/LTM LTM2 C2 server-hello"</span>;
+    flow:established,to_client; dsize:<span class="nm">72</span>;  content:<span class="st">"LTM2SHLO"</span>; depth:<span class="nm">8</span>;
+    classtype:trojan-activity; sid:<span class="nm">9500002</span>; rev:1;)</code></pre>
+    </div>
+    <div class="prose"><p>A passive dissector parses the handshake and walks the AEAD framing for triage. It
+      cannot decrypt — session keys are per-connection ephemerals — but it reliably identifies and structures
+      an LTM2 stream from a single direction of capture.</p></div>
+  </section>
+
+  <!-- IOCs -->
+  <section>
+    <span class="kick">09 · Indicators</span>
+    <h2>Indicators of compromise</h2>
+    <dl class="ioc">
+      <dt>C2</dt>
+      <dd>mc.heyiwei.net · TCP 25565 &nbsp; <span style="color:var(--muted)">(apex heyiwei.net parked 185.53.179.146 / .128, 199.59.243.228; NS *.dyna-ns.net)</span></dd>
+      <dt>Protocol magic</dt>
+      <dd>LTM2CHLO <span style="color:var(--muted)">(104 B → server)</span> · LTM2SHLO <span style="color:var(--muted)">(72 B → client)</span></dd>
+      <dt>Host artifacts</dt>
+      <dd>/usr/local/bin/Heyiwei · /tmp/Heyiwei.lock · /etc/ltm/Heyiwei-control · Heyiwei.service · env HEYIWEI_SERVICE=1 · proc name khungtaskd</dd>
+      <dt>Delivery</dt>
+      <dd>loader on :8080 colocated with the C2; second loader 143.246.56.120:8080; delivered by 45.144.52.239 (H2NEXUS Cloud, UAE)</dd>
+      <dt>Sample · x86-64</dt>
+      <dd><span class="hash">62e2b8a6c75cde2ec395c34ac5055be0d0c51d796e93d37b2f1681a833693896 <button class="cp" data-copy="h1">copy</button></span></dd>
+      <dt>Sample · i686</dt>
+      <dd><span class="hash">cc1b33edd4b08c51884b3e8da0d1536fa531a7119e6ab08e5d3a29b0c91188e5 <button class="cp" data-copy="h2">copy</button></span></dd>
+    </dl>
+    <span id="h1" hidden>62e2b8a6c75cde2ec395c34ac5055be0d0c51d796e93d37b2f1681a833693896</span>
+    <span id="h2" hidden>cc1b33edd4b08c51884b3e8da0d1536fa531a7119e6ab08e5d3a29b0c91188e5</span>
+  </section>
+
+  <footer>
+    <p class="mono">Heyiwei / LTM2 · bespoke encrypted-C2 Linux RAT · TLP:CLEAR</p>
+    <p>Analysis is of the x86-64 build; the other ten architectures share the LTM2 protocol and this
+    four-service dispatch but were not individually decompiled. Family labels from third-party services were
+    treated as leads and overridden only against primary analysis. The key schedule is documented here but not
+    published as a runnable decryptor.</p>
+  </footer>
+
+</main>
+
+<script>
+(function(){
+  var sun='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></svg>';
+  var moon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+  var btn=document.getElementById('themeBtn');
+  function cur(){var a=document.documentElement.getAttribute('data-theme');if(a)return a;
+    return (window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}
+  function paint(){btn.innerHTML=cur()==='dark'?sun:moon;}
+  try{var s=localStorage.getItem('ltm2-theme');if(s)document.documentElement.setAttribute('data-theme',s);}catch(e){}
+  paint();
+  btn.addEventListener('click',function(){
+    var next=cur()==='dark'?'light':'dark';
+    document.documentElement.setAttribute('data-theme',next);
+    try{localStorage.setItem('ltm2-theme',next);}catch(e){}
+    paint();
+  });
+  document.querySelectorAll('.cp').forEach(function(b){
+    b.addEventListener('click',function(){
+      var el=document.getElementById(b.getAttribute('data-copy'));
+      var txt=el?(el.textContent||'').trim():'';
+      function done(){b.classList.add('done');var o=b.textContent;b.textContent='copied';
+        setTimeout(function(){b.classList.remove('done');b.textContent=o;},1400);}
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(txt).then(done,function(){sel(el);});
+      }else{sel(el);}
+      function sel(n){try{var r=document.createRange();r.selectNodeContents(n);
+        var s=window.getSelection();s.removeAllRanges();s.addRange(r);}catch(e){}}
+    });
+  });
+})();
+</script>
+</body>
+</html>
